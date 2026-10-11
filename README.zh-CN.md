@@ -59,17 +59,20 @@ MBR 分区表、三个分区；我们用 `fdisk` / `sfdisk` 在一个同尺寸�
 
 | 分区 | 起始扇区 | 镜像内大小 | 类型码 | 是什么 |
 |---|---|---|---|---|
-| p1 | 32768 | 100 MiB | `0c` W95 FAT32 (LBA) | `BOOT`：`KERNEL`、`.dtb` 文件、`boot.ini` |
+| p1 | 32768 | 100 MiB | `0c` W95 FAT32 (LBA) | `BOOT`：`Image`（内核）、`uInitrd`、`boot.ini`、`.dtb` 文件、机型选择脚本 |
 | p2 | 237568 | 6.7 GiB | `83` Linux (ext4) | 操作系统 |
 | p3 | 14368768 | 100 MiB 占位 | `07` HPFS/NTFS/exFAT | 卷标 `EASYROMS`，首次开机时长成整卡 |
 
 于是：
 
 - **p1 `BOOT`** 是 FAT32。Windows 读得了，它就是最先冒出来的那个小盘。
-- **p2（ext4）** Windows 完全读不了。微软自己的 WSL 文档写得很直白：
+- **p2（ext4）** Windows 完全读不了。微软列出的 Windows 支持文件系统是
+  *"NTFS / ExFAT / UDF / FAT32"*——ext4 不在里面；微软自己的 WSL 文档也写得很直白：
   *"If you have an Ext4-formatted drive, you cannot mount it on your Windows file system."*
-  Windows 没有 ext4 驱动，它看到的就是一个"文件系统未知"的卷——而它面对可移动介质上未知文件系统的
-  标准反应，就是提议格式化。
+  微软还定义了触发这个弹窗的状态：*"If a partition doesn't have a file system (it's listed as RAW
+  instead of NTFS, ReFS, FAT32, or exFAT) …"*，并且针对这种情况给了它自己的警告：
+  *"Formatting a disk erases all data on it, so don't do this step if you're trying to recover files
+  from the disk."*
 - **p3 `EASYROMS`** 是 exFAT，Windows **读得了**。如果它没出现，通常只是缺盘符，
   该做的是分配盘符，不是格式化。
 
@@ -94,12 +97,16 @@ readers"*，而且它需要管理员权限和 Windows 11（或商店版 WSL）�
 
 那说的是刷机那一步，但每次弹窗都适用：
 
-- 格式化 **p1（`BOOT`）**：丢掉 `KERNEL`、`.dtb` 文件和 `boot.ini`，机器起不来了。
+- 格式化 **p1（`BOOT`）**：丢掉 `Image`（内核）、`uInitrd`、`boot.ini`、`.dtb` 文件，
+  以及镜像回写到 `/boot` 里的那几个隐藏状态文件——其中包括**已经持久化的主板/屏幕选择**。
+  机器起不来了；而在需要屏幕专用设备树的机器上，结果通常就是一块黑屏。
   游戏还在卡上，但你得重新刷一次镜像才能用它们。
 - 格式化 **p2（ext4）**：丢掉操作系统。这通常就是 Windows 正在抱怨的那个分区，
   也恰恰是它什么都显示不给你看的那一个——所以人们才会顺手点"确定"。
-- 格式化 **p3（`EASYROMS`）**：丢掉游戏和 `roms` 目录结构。文件还能拷回来，但**不要删掉本来就有的目录**：
-  ArkOS 专门警告过，PSP 和 NDS 那两个目录里有对应模拟器需要的文件。
+- 格式化 **p3（`EASYROMS`）**：丢掉游戏、`roms` 目录结构，以及被 bind-mount 进系统的 `roms/tools`
+  目录（PortMaster 等机内工具都在那里）。这一项是三个里唯一还能扛过去的——操作系统照样能启动。
+  但**不要删掉本来就有的目录**：ArkOS 专门警告过，PSP 和 NDS 那两个目录在你放进第一个游戏之前，
+  就已经有对应模拟器需要的文件在里面。
 
 在一台"操作系统就住在同一张卡上"的设备上，格式化不是"把卡恢复到已知良好状态"的按钮。
 
@@ -107,13 +114,35 @@ readers"*，而且它需要管理员权限和 Windows 11（或商店版 WSL）�
 
 ![决策树：在让任何东西格式化这张卡之前，先确认什么](docs/02-decision-tree.png)
 
-1. **分区表没了。** 磁盘管理里整张卡显示为未分配，或者那个大分区显示为 `RAW`，机器起不来。
-   Windows 会很乐意"帮你修"——建一个大空分区，而那正好会覆盖掉仍然指向你数据的分区表。
+1. **分区表没了。这里可以直接借用微软自己的用词来区分两种情况**：
+   分区显示为 **`RAW`**，意思是 Windows 看得见这个分区、但读不懂它的文件系统——
+   这正是 Linux 分区该有的样子；而磁盘显示为 **"Not Initialized"**（微软的解释是
+   *"the drive formatting has become corrupted somehow"*）或 **"Unreadable"**，
+   意味着 Windows 连分区结构都理不清了。**后两种才是损坏或硬件故障，不是 Linux 文件系统。**
+   这两种情况下 Windows 都会很乐意"帮你修"——建一个大空分区，而那正好会覆盖掉仍然指向你数据的分区表。
    **TestDisk** 就是干这个的：它重建丢失的分区表、从备份里恢复 FAT 引导扇区，
    还能定位 ext2/3/4 的备份超级块。
-2. **卡正在坏，或者是假卡。** 它在每一台读卡器里都消失，或者昨天还好好的今天机器就是起不来。
-   群里那位因为用手机 OTG 整理了文件而丢掉 320 个游戏的人，描述的就是这一类。
-   把还能读出来的扇区尽快镜像成文件，然后换卡。开始出现这种症状的卡，救不回来。
+2. **卡正在坏、是假卡，或者被手机重新格式化过。** 群里那位用手机整理文件、丢掉 320 个游戏的人，
+   需要一个具体的答案：这件事有两种**有据可查**的成因，而其中只有一种是硬件损坏。
+
+   - **安卓的"采用为内部存储"（adoptable storage）。** 如果手机当时提示"设置这张 SD 卡"而用户点了同意，
+     安卓会把它**重新格式化并加密**。Google 自己的文档：
+     *"When external storage media is adopted, it's formatted and encrypted to only work with a single
+     Android device at a time"*、*"they can choose to adopt the media, which formats and encrypts it"*。
+     此后这张卡在 R36S 上读不出，在电脑上也读不出，任何恢复工具都拿不回游戏——
+     但**没有任何硬件损坏**，处理办法就是把卡重新格式化、再把游戏拷一遍。
+   - **卡自己置上了永久写保护位。** SD 卡有一个 `PERM_WRITE_PROTECT` 标志（CSD bit 13），
+     一旦置上就是永久只读——Kingston 的规格书里写了这一位，而 Linux 在 MMC 层无条件执行它。
+     从那以后这张卡看着一切正常，就是拒绝任何写入，表现为"一个修不好的文件系统"。
+
+   第三种说法——"OTG 读卡器把卡搞坏了"——是流传最广的解释，而我们**找不到任何一手来源**支持它，
+   请把它当成都市传说。
+
+   > ⚠️ **未验证**：我们没有复现手机 / OTG 这个故障。上面两条机制是有据可查的那两条；
+   > "读卡器把卡弄坏了"到处都是，但没有任何文档。
+
+   不论哪一种，处理方式一样：把还能读出来的扇区尽快镜像成文件，然后换卡。
+   开始出现这种症状的卡，救不回来。
 
 第三种需要排除的情况是纯粹的**假容量卡**——标称 128 GB、实际只有 8 GB，
 超出真实容量的数据会静默地自我覆盖。Linux/macOS 上用 `f3`（Fight Flash Fraud），
@@ -125,7 +154,9 @@ Windows 上用 `h2testw` 可以测。群里那位"内存卡实际容量只有90G
 ![真机 R36S 的系统信息界面：SD Card 1 为 119.88 GB，SD Card 2 未插入](docs/06-real-r36s-system-info.png)
 
 我们自己那台的"系统信息"界面。有两件事值得读出来：**SD Card 1 显示 119.88 GB**——
-这正是 128 GB 这一档容量该有的读数，属于十进制与二进制之间的差值，不是假卡的证据。
+这正是 128 GB 这一档容量该有的读数，属于十进制与二进制之间的差值，不是假卡的证据
+（SD 标准对 SDXC 的定义只有一句 *"over 32GB-2TB"*，并不规定精确字节数，
+所以同标称容量的两张卡**本就不要求**一致）。
 **SD Card 2 是单独一栏**，那就是第二个卡槽。下面"游戏卡能不能通用"这个问题，关键就在这个槽上。
 
 ---
@@ -166,10 +197,17 @@ sudo dd if=/dev/sdX of=~/r36s-card.img bs=4M status=progress conv=fsync
 ```bash
 sudo apt install gddrescue
 sudo ddrescue -d -r3 /dev/sdX ~/r36s-card.img ~/r36s-card.map
+
+# 改成"卡到卡"的话，手册里的写法要加 -f，不加会被直接拒绝：
+sudo ddrescue -f -r3 /dev/sdX /dev/sdY mapfile
 ```
 
-`-d`（`--idirect`）绕过内核缓存；`-r3`（`--retry-passes=3`）对坏区域重试三遍；
-第三个参数是 mapfile，它让这次拷贝可以续跑，并且明确告诉你哪些区域最终没读回来。
+`-d`（`--idirect`）是让**输入端**绕过内核缓存（直接写是另一个标志 `-D`）；
+`-r3`（`--retry-passes=3`）对坏区域重试三遍；第三个参数是 mapfile，
+手册称它为 *"an essential part of ddrescue's effectiveness"*，它让这次拷贝可以续跑，
+并且明确告诉你哪些区域最终没读回来。第二种写法里的 `-f` 不是可选项：
+手册写的是 *"needed when outfile is not a regular file, but a device or partition"*——
+不加它，ddrescue 会拒绝往设备上写。这道保险是有道理的，所以设备名请核对两遍。
 Windows 上，**Win32DiskImager** 做同一件事——它的官方说明就是"把裸镜像写到可移动设备，
 **或者把可移动设备备份成裸镜像文件**"，而且它建议在往任何设备写入之前，先做一次 Read。
 
@@ -198,22 +236,39 @@ sudo fsck.vfat -n /dev/sdX1     # -n = 只检查，不修改
 sudo e2fsck -f -y /dev/sdX2     # -f = 强制完整检查，-y = 全部回答 yes
 ```
 
-`fsck.vfat -n` 是只读检查；如果它报出问题，可以去掉 `-n` 再跑一次让它修。
+`fsck.vfat -n` 是只读检查；如果它报出问题，用 `-a` 再跑一次让它修。
 对已挂载的文件系统跑 `e2fsck` 是坏主意——想先看一眼就用 `-n`。
 卡可疑的时候，**先对镜像跑这些命令**。
+
+**有一个标志必须用对，因为被抄错得太多了：** 对 `fsck.fat` 来说，`-f` **不是**"强制"的意思。
+手册的定义是 *"salvage unused cluster chains to files"*（把游离簇链抢救成文件）——
+这跟"安全地空跑一次检查"几乎正好相反，而且它会把已删除的数据暴露成新文件。
+FAT 上"自动修复"的标志是 `-a`（或 `-p`）。而 `e2fsck` 里同一个字母**确实**是"强制"，
+混淆就是这么来的。顺带一提：`fsck.vfat`、`fsck.fat`、`dosfsck` 是同一个程序的三个名字。
 
 ### 工具对照
 
 | 要做什么 | Windows | Linux / macOS |
 |---|---|---|
 | 看分区表 | 磁盘管理、DiskGenius | `lsblk`、`fdisk -l`、`sfdisk --dump` |
-| 把卡镜像成文件 | Win32DiskImager（Read）、DiskGenius | `dd`、`ddrescue` |
+| 把卡镜像成文件 | Win32DiskImager（Read）、DiskGenius 专业版 | `dd`、`ddrescue` |
 | 把镜像写回卡 | Rufus、USB Image Tool、Win32DiskImager | `dd` |
 | 重建丢失的分区表 | TestDisk、DiskGenius | TestDisk |
-| 读取/恢复 ext4 内容 | DiskGenius | 挂载它、`e2fsck`、PhotoRec |
+| 读取/恢复 ext4 内容 | DiskGenius（免费版只能拷小文件） | 挂载它、`e2fsck`、PhotoRec |
 | 从坏掉的文件系统里雕刻文件 | PhotoRec | PhotoRec |
 | 检查 FAT32 / ext4 完整性 | DiskGenius（检查与修复） | `fsck.vfat`、`e2fsck` |
 | 测假容量卡 | `h2testw` | `f3probe`、`f3write` + `f3read` |
+
+**依赖 DiskGenius 之前，有两件事必须知道。** 它确实有文档支持在 Windows 下读写 EXT4，
+但各版本的差别在坏卡场景下很要命：在官方功能对比里，*"Copy Files from Ext2/3/4 Partition"* 这一行
+在免费版**和**标准版都标着 *"Only small files can be copied"*；而
+*"Back up Partition to Image by Sectors"*——也就是坏卡真正需要的那个**逐扇区镜像**——免费版没有。
+所以：做镜像用 Linux 或 `ddrescue`，DiskGenius 留给"浏览和取文件"。
+
+另外纠正一条被推荐得极广的工具：**balenaEtcher 不能把设备读成镜像文件。**
+它自己的 issue 里 *"Implement a way to perform a backup from a drive"* 从 2016 年挂到现在。
+它能做的是设备到设备的克隆。所以它当不了这个用途的备份工具——
+而且 ArkOS 本来就叫你别用它写这些镜像。
 
 > ⚠️ **未实测**：Windows 那一列全部引自各厂商自己的文档。我们不跑 Windows，
 > 所以 DiskGenius、Win32DiskImager、DiskGenius 的 ext4 浏览、`h2testw` 这些我们都没有实际执行过。
@@ -238,7 +293,10 @@ sudo dd if=~/r36s-card.img of=/dev/sdY bs=4M status=progress conv=fsync
 ```
 
 动手前先比容量。`blockdev --getsz /dev/sdX` 打印 512 字节扇区数，`lsblk` 打印字节数。
-**同样是"128 GB"的卡，扇区数并不一样。** 我们自己那台报 119.88 GB；
+**同样是"128 GB"的卡，扇区数并不一样。** 这不是传说：SD 标准对 SDXC 的定义只有
+*"over 32GB-2TB"*，不规定精确字节数，真实容量来自每张卡自己的 `C_SIZE` 寄存器，
+所以印刷相同的两张卡**被允许**不一样。现实中也有人遇到两张同品牌同型号的"128 GB"卡，
+其中一张小了几个 GB，装不下另一张的镜像。我们自己那台报 119.88 GB；
 同容量档位的另一张卡差上一两个 GB 是常事。目标卡比源卡小的话，拷贝会中途写不下，
 留下一张"看着挺像、但起不来"的截断卡。群里那位说 32 G 卡用傲梅轻松备份克隆"得用 64 G 卡才行"，
 背后的机制就是这个——扇区级克隆要求目标不小于源。
@@ -276,12 +334,16 @@ sudo dd if=~/r36s-card.img of=/dev/sdY bs=4M status=progress conv=fsync
   G80C/G80CA 山寨板，以及 `Y3506`「酱油」系列。放对 `.dtb` 就能开机；
   放了别的板子的，你得到的就是大家嘴里那句"刷完黑屏"。
 
-  这张矩阵还能说明一件具体的事：截至我们阅读时，它覆盖的是 V12（两种屏）、V20、V21、V22、Y02 和山寨板，
-  **没有 V30 这一档**。这和 QQ 日志里 V30 用户说"看群文件也没找到v30的相关信息"是吻合的。
-  如果你手上是 V30，先看项目当前 release notes，别默认已经有对应 profile——这个列表每版都在变。
+  真正该去翻的地方不是 wiki 那张支持表，而是项目自己的 `BOOT` 暂存目录——那里每个主板版本一个目录。
+  我们核对时它包含：`R36S-V30 2025-11-18`、`R36S-V21 2024-12-18 2550/2551/2552`、
+  `R36S-V22 2024-12-18`、`R36S-Y02 2024-11-27` 与 `2024-12-18`、`R36XX-V21 2024-12-18`、
+  `R36S Plus-V20 2025-03-18`、`HL-R36H-V20` 与 `V21`、`GR36S-Y07 2025-09-11`，
+  以及 `G80C`/`G80CA`/`G80D`/`GR36` 山寨板。
+  也就是说 **V30 并不孤单**。但这里有个值得记下来的教训：QQ 日志里 V30 用户说
+  "看群文件也没找到v30的相关信息"——这正是去查 wiki 支持表、而不是去查 `.dtb` 实际所在目录的结果。
 
-  > ⚠️ **这是写作当时的核对结果，不是长期事实。** 我们是在 2026-10-11 读的那张支持列表。
-  > 厂商列表会变，依赖之前请回源核对。
+  > ⚠️ **这是写作当时的核对结果，不是长期事实。** 我们是在 2026-10-11 列的这棵目录树。
+  > 它每版都会变，依赖之前请回源核对。
 - **实际结论：** 各管各的。系统放内置卡，游戏放第二张卡；
   要把卡借人，确认借出去的是游戏卡。系统卡如果一定要换机器用，
   就要预期重新选一次机型 / 换一次 `.dtb`。
@@ -320,9 +382,11 @@ sudo dd if=~/r36s-card.img of=/dev/sdY bs=4M status=progress conv=fsync
 - **在卡还能用的那天就备份。** 一次 `dd` 或 Win32DiskImager 的 Read 花二十分钟，
   把"我丢了 320 个游戏和我做的主题"变成"我把镜像还原回去了"。
 - **系统卡和游戏卡分开。** 这样一次格式化事故的代价是一堆文件，而不是一整套系统。
-- **不要用手机或 OTG 读卡器在卡上整理文件。** 这条来自群里那位因为这么干丢掉 320 个游戏的人；
-  其机制——可移动介质写到一半掉电或断连——不是卡能自己防住的。
+- **不要用手机或 OTG 读卡器在卡上整理文件。** 这条来自群里那位因为这么干丢掉 320 个游戏的人。
+  有两种翻车方式，而且两种都救不回来：手机若提议把这张卡"用作内部存储"，点了同意就等于
+  **重新格式化并加密**；而写到一半断连的可移动介质，没有日志可以回滚。
   正经做法是关机（`Start + Power`），取出卡，用真正的读卡器接电脑。
+  手机一旦弹出"如何使用这张 SD 卡"，对 R36S 的卡来说，答案永远不是"用作内部存储"。
 - **买正规渠道的正牌卡，并且到手就测一次。** ArkOS 原话：最小 8 GB，
   强烈建议 16 GB 以上，*"Do not use low quality or no name brand SD cards. Those will most likely fail
   quickly, cause inconsistent emulation performance, or fail in booting up."*
@@ -345,9 +409,18 @@ sudo dd if=~/r36s-card.img of=/dev/sdY bs=4M status=progress conv=fsync
 | "If you have an Ext4-formatted drive, you cannot mount it on your Windows file system"；"`wsl --mount` does not currently support USB/flash drives/SD card readers"；需要管理员权限与 Windows 11 | [Microsoft Learn → Mount a Linux disk in WSL 2](https://learn.microsoft.com/en-us/windows/wsl/wsl2-mount-disk) |
 | "把裸镜像写到可移动设备，或者把可移动设备备份成裸镜像文件"；写入前建议先 Read | [Win32 Disk Imager](https://sourceforge.net/projects/win32diskimager/) |
 | 分区表恢复、从备份恢复 FAT32 引导扇区、定位 ext2/3/4 备份超级块、从已删分区拷文件 | [CGSecurity → TestDisk](https://www.cgsecurity.org/wiki/TestDisk) |
+| `BOOT` 分区的内容、真实的 `boot.ini`、以及各主板版本的 `.dtb` 目录 | [`southoz/dArkOSRE-R36` → `files/BOOT/`](https://github.com/southoz/dArkOSRE-R36/tree/main/files/BOOT) |
+| 输出端是设备/分区时必须加 `-f`；`-d/--idirect` 与 `-D/--odirect` 的区别；mapfile 的作用 | [GNU ddrescue 手册](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html) |
+| `fsck.fat` 的 `-f` 意为"把游离簇链抢救成文件"；`fsck.vfat`/`dosfsck` 是同一个程序 | [dosfstools `fsck.fat(8)`](https://manpages.debian.org/bookworm/dosfstools/fsck.vfat.8.en.html) |
+| Windows 支持哪些文件系统；`RAW` 的含义与微软自己"要恢复文件就别格式化"的警告；"Not Initialized" / "Unreadable" 磁盘状态 | [Microsoft Learn → 文件系统驱动](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/about-file-system-drivers)、[磁盘管理排错](https://learn.microsoft.com/en-us/troubleshoot/windows-server/backup-and-storage/troubleshoot-disk-management) |
+| 安卓把卡"采用为内部存储"时会格式化并加密，使其绑定到单台设备 | [Android Open Source Project → Adoptable storage](https://source.android.com/docs/core/storage/adoptable) |
+| 卡自身的 `PERM_WRITE_PROTECT` 标志（CSD bit 13）会让卡永久只读 | Kingston SD 规格书；Linux `drivers/mmc/core/sd.c` |
+| SDXC 只被定义为 "over 32GB-2TB"，精确容量因卡而异 | [SD Association → Capacity](https://www.sdcard.org/developers/sd-standard-overview/capacity-sd-sdhc-sdxc-sduc/) |
+| DiskGenius 各版本限制（"Only small files can be copied"、免费版无逐扇区镜像）与 EXT4 读写支持 | [DiskGenius → Windows 读写 Ext4](https://www.diskgenius.com/how-to/ext4-windows.php)、[版本对比](https://www.diskgenius.com/editions.php) |
+| balenaEtcher 无法把设备读成镜像 | [balena-io/etcher issue #266](https://github.com/balena-io/etcher/issues/266) |
 | Windows 下读取/恢复 EXT4/3/2 文件与分区 | [DiskGenius → Linux Data Recovery](https://www.diskgenius.com/how-to/linux-data-recovery.php) |
 | `-d/--idirect` 与 `-r/--retry-passes`、mapfile 的作用 | [GNU ddrescue 手册](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html) |
-| 假容量卡检测 | [AltraMayor/f3](https://github.com/AltraMayor/f3)；`h2testw`（[heise.de](https://www.heise.de/download/product/h2testw-50537)） |
+| 假容量卡检测 | [AltraMayor/f3](https://github.com/AltraMayor/f3)；`h2testw`（[heise.de](https://www.heise.de/download/product/h2testw-50539)） |
 | "要格式化磁盘"弹窗指的是 Linux 分区；`TF1-OS` / `TF2-GAME` 卡槽命名；开机时不要拔卡 | [r36s.org → How to Add Games to R36S](https://r36s.org/articles/tutorial-add-games) |
 | 第一节引用的 QQ 原文 | 对 9 个中文掌机 QQ 群、22,869 条去重消息的内部分析 |
 

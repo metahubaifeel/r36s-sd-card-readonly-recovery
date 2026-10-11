@@ -158,10 +158,10 @@ noticing that their "128 GB" card is "actually only 90 GB" is the benign version
 
 ![A real R36S System Info screen showing SD Card 1 at 119.88 GB and SD Card 2 not inserted](docs/06-real-r36s-system-info.png)
 
-Our own unit's System Info screen. Two things worth reading off it: **SD Card 1 reports 119.88 GB** on a
-card sold as 128 GB — that is normal decimal-vs-binary marketing, not a fake card — and **SD Card 2 is
-listed separately**, which is the second slot. That second slot is what makes the "my games card is
-interchangeable" question below interesting.
+Our own unit's System Info screen. Two things worth reading off it: **SD Card 1 reports 119.88 GB**,
+which is the figure you expect from a card in the 128 GB class — the usual decimal-vs-binary gap, not
+evidence of a fake card — and **SD Card 2 is listed separately**, which is the second slot. That second
+slot is what makes the "my games card is interchangeable" question below interesting.
 
 ---
 
@@ -277,7 +277,7 @@ sudo dd if=~/r36s-card.img of=/dev/sdY bs=4M status=progress conv=fsync
 
 Check the sizes before you start. `blockdev --getsz /dev/sdX` prints the capacity in 512-byte sectors,
 `lsblk` prints it in bytes. **Cards sold as the same capacity do not have the same number of sectors.**
-Our own unit's "128 GB" card reports 119.88 GB; another brand's "128 GB" card can be a gigabyte or two
+Our own unit reports 119.88 GB; another card in the same capacity class can easily be a gigabyte or two
 different. If the target is smaller than the source, the copy runs out of room partway and leaves you with
 a truncated card that looks plausible and does not boot. This is exactly the mechanism behind the group
 member's report that cloning a 32 GB card with AOMEI Backupper *"needed a 64 GB card"* — sector-level
